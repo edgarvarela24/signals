@@ -1,0 +1,32 @@
+{
+	"name": "Ziglang devcontainer",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"args": {
+			"ZIG_VERSION": "0.14.1",
+			"MINISIGN_VERSION": "0.12"
+		}
+	},
+	"capAdd": [
+		"SYS_PTRACE"
+	],
+	"securityOpt": [
+		"seccomp=unconfined"
+	],
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {},
+		"ghcr.io/devcontainers/features/git:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-azuretools.vscode-docker",
+				"ziglang.vscode-zig",
+				"ianic.zig-language-extras",
+				"lorenzopirro.zig-snippets",
+				"vadimcn.vscode-lldb"
+			]
+		}
+	},
+	"remoteUser": "vscode"
+}
