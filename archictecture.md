@@ -75,7 +75,13 @@ These are the fundamental building blocks of the architecture.
     3.  The results are drawn to an in-memory **Virtual Buffer**.
     4.  This buffer is **diffed** against its state from the previous frame.
     5.  A minimal set of terminal escape codes is generated to apply only the changes to the real terminal.
-* **Event Handling**:
-    * **Mouse**: On click, the framework performs **hit detection** by checking the click coordinates against a list of component `Rect`s (iterated in reverse to respect z-index). A corresponding `Msg` is dispatched.
-    * **Keyboard**: Events are dispatched as `Msg`s. A concept of **focus** (stored in the `Model`) determines which component receives the input.
+### 5. Event Handling
+
+The framework adheres to a **keyboard-first, mouse-enhanced** design philosophy. All functionality is accessible via the keyboard, while the mouse serves as an optional accelerator for discoverability and direct manipulation.
+
+* **Unified Event Model:** The core principle is to decouple application logic from the input source. Both keyboard and mouse inputs are translated into the same set of `Msg`s before being sent to the `update` function. For example, clicking a button or pressing `Enter` while it's focused will dispatch the exact same `Msg`.
+
+* **Keyboard Input (Focus-Driven):** Keyboard navigation is managed by a **focus model**. The ID of the currently "active" component is stored in the `Model`. Keyboard events (e.g., `Enter`, `Tab`, character input) are routed to the focused component, which is responsible for dispatching the appropriate `Msg`.
+
+* **Mouse Input (Hit-Detection-Driven):** Mouse interactivity is managed by **hit detection**. After the Layout Engine computes the `Rect` for every UI `Node`, the framework can map click coordinates to a specific component. A click on a component dispatches the corresponding `Msg` and will typically also update the `Model` to set focus on that component.
 * **Styling**: A `Style` struct is used to apply type-safe styling (`fg`, `bg`, attributes) to components.
