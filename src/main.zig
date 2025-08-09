@@ -1,46 +1,62 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
-
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // Don't forget to flush!
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "use other module" {
-    try std.testing.expectEqual(@as(i32, 150), lib.add(100, 50));
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
-}
-
 const std = @import("std");
 
-/// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("north_star_lib");
+const termbox = @import("termbox");
+const Termbox = termbox.Termbox;
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var t = try Termbox.init(allocator);
+    defer t.shutdown() catch {};
+
+    try t.selectInputSettings(.{
+        .mode = .Esc,
+        .mouse = true,
+    });
+
+    var anchor = t.back_buffer.anchor(1, 1);
+    try anchor.writer().print("Input testing", .{});
+
+    anchor.move(1, 2);
+    try anchor.writer().print("Press q key to quit", .{});
+
+    try t.present();
+
+    main: while (try t.pollEvent()) |ev| {
+        switch (ev) {
+            .Key => |key_ev| switch (key_ev.ch) {
+                'q' => break :main,
+                else => {},
+            },
+            else => {},
+        }
+
+        t.clear();
+        anchor.move(1, 1);
+        switch (ev) {
+            .Key => |key_ev| {
+                // Check if it's a printable character (like 'a', 'b', '$')
+                if (key_ev.ch != 0) {
+                    // Use {u} to print the character, and {} to print the number code
+                    try anchor.writer().print("Key Press: '{u}' (code: {})", .{ key_ev.ch, key_ev.ch });
+                } else {
+                    // It's a special key like F1, Arrow Up, Spacebar, etc.
+                    try anchor.writer().print("Special Key: {}", .{key_ev.key});
+                }
+            },
+            .Mouse => |mouse_ev| {
+                try anchor.writer().print("Mouse: {} at ({}, {})", .{ mouse_ev.action, mouse_ev.x, mouse_ev.y });
+            },
+            else => |other_ev| {
+                // A catch-all for any other event types, like a resize event
+                try anchor.writer().print("Other Event: {}", .{other_ev});
+            },
+        }
+        anchor.move(1, 2);
+        try anchor.writer().print("Press q key to quit", .{});
+
+        try t.present();
+    }
+}
