@@ -68,7 +68,19 @@ pub const SignalSystem = struct {
         return ptr;
     }
 
-    pub fn createEffect(self: *@This(), comptime Context: type, context: *Context, run_fn: *const fn (*Context) void) !*Effect {
+    pub fn createEffect(self: *@This(), effect_object: anytype) !*Effect {
+        const EffectObject = @TypeOf(effect_object.*);
+
+        // At compile time, ensure the passed object has a 'run' method.
+        comptime {
+            if (!@hasDecl(EffectObject, "run")) {
+                @compileError("Effect object of type '" ++ @typeName(EffectObject) ++ "' must have a 'run' method.");
+            }
+        }
+
+        const run_fn = &EffectObject.run;
+        const Context = EffectObject; // The object's type is the context type.
+
         const Wrapper = struct {
             fn run(effect: *Effect) void {
                 const typed_context: *Context = @alignCast(@ptrCast(effect.context.?));
@@ -79,12 +91,12 @@ pub const SignalSystem = struct {
 
         const ptr = try self.allocator.create(Effect);
         ptr.* = .{
-            .system = self, // Set the pointer back to the system.
-            .context = context,
+            .system = self,
+            .context = effect_object, // The context is the object itself.
             .user_fn = @constCast(run_fn),
             .run_fn = &Wrapper.run,
         };
-        // Run the effect once to establish initial subscriptions.
+
         ptr.run();
         return ptr;
     }
@@ -175,36 +187,6 @@ test "create signal, get and set value" {
     try std.testing.expectEqual(my_signal.get(), 25);
 }
 
-test "create type-safe effect" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
-    defer ss.deinit();
-
-    const EffectContext = struct {
-        name: *Signal([]const u8),
-        run_count: u32,
-
-        fn run(self: *@This()) void {
-            _ = self.name.get();
-            self.run_count += 1;
-        }
-    };
-
-    var context = EffectContext{
-        .name = try ss.createSignal(.{ .value = "Evan" }),
-        .run_count = 0,
-    };
-    defer context.name.deinit();
-
-    var effect = try ss.createEffect(EffectContext, &context, &EffectContext.run);
-    defer effect.deinit();
-
-    try std.testing.expectEqual(context.run_count, 1);
-    context.name.set("North Star");
-    try std.testing.expectEqual(context.run_count, 2);
-}
-
 test "effect does not create duplicate subscriptions" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -231,7 +213,7 @@ test "effect does not create duplicate subscriptions" {
     var context = EffectContext{ .signal_to_test = counter, .run_count = 0 };
 
     // Create the effect, passing the counter signal as the context.
-    var effect = try ss.createEffect(EffectContext, &context, &EffectContext.run);
+    var effect = try ss.createEffect(&context);
     defer effect.deinit();
 
     // ASSERT 1: The effect runs once on creation.
@@ -244,4 +226,68 @@ test "effect does not create duplicate subscriptions" {
     // If the bug existed, the count would be 4 (1 initial + 3 from the set).
     // With the fix, the count will be 2 (1 initial + 1 from the set).
     try std.testing.expectEqual(@as(u32, 2), context.run_count);
+}
+
+test "createEffect with an effect object" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    const TestEffectWithContext = struct {
+        name: *Signal([]const u8),
+        run_count: u32,
+
+        fn run(self: *@This()) void {
+            _ = self.name.get();
+            self.run_count += 1;
+        }
+    };
+
+    var my_effect = TestEffectWithContext{
+        .name = try ss.createSignal(.{ .value = "Evan" }),
+        .run_count = 0,
+    };
+    defer my_effect.name.deinit();
+
+    var effect = try ss.createEffect(&my_effect);
+    defer effect.deinit();
+
+    try std.testing.expectEqual(my_effect.run_count, 1);
+    my_effect.name.set("North Star");
+    try std.testing.expectEqual(my_effect.run_count, 2);
+}
+
+test "createEffect works with simple, field-less objects" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    const SimpleEffect = struct {
+        pub var run_count: u32 = 0;
+
+        fn run(self: *@This()) void {
+            _ = self;
+            run_count += 1;
+        }
+    };
+
+    // Reset static state before each test run for consistency.
+    SimpleEffect.run_count = 0;
+
+    // Create an instance of our simple effect.
+    var simple_effect = SimpleEffect{};
+
+    // Pass the simple effect object to createEffect.
+    var effect = try ss.createEffect(&simple_effect);
+    defer effect.deinit();
+
+    // It should have run once on creation.
+    try std.testing.expectEqual(1, SimpleEffect.run_count);
+
+    // Manually running it should increment the count again.
+    // This proves the effect was created and is functional.
+    effect.run();
+    try std.testing.expectEqual(2, SimpleEffect.run_count);
 }
