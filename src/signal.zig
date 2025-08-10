@@ -27,13 +27,21 @@ pub const SignalSystem = struct {
         return ptr;
     }
 
-    pub fn createEffect(self: *@This(), context: ?*anyopaque, run_fn: *const fn (?*anyopaque) void) !*Effect {
+    pub fn createEffect(self: *@This(), comptime Context: type, context: *Context, run_fn: *const fn (*Context) void) !*Effect {
+        const Wrapper = struct {
+            fn run(effect: *Effect) void {
+                const typed_context: *Context = @alignCast(@ptrCast(effect.context.?));
+                const user_run_fn: *const fn (*Context) void = @alignCast(@ptrCast(effect.user_fn.?));
+                user_run_fn(typed_context);
+            }
+        };
+
         const ptr = try self.allocator.create(Effect);
         ptr.* = .{
-            .allocator = self.allocator,
             .system = self, // Set the pointer back to the system.
             .context = context,
-            .run_fn = run_fn,
+            .user_fn = @constCast(run_fn),
+            .execute_fn = &Wrapper.run,
         };
         // Run the effect once to establish initial subscriptions.
         ptr.run();
@@ -73,19 +81,19 @@ pub fn Signal(comptime T: type) type {
 
 pub const Effect = struct {
     const Self = @This();
-    allocator: std.mem.Allocator,
     system: *SignalSystem,
     context: ?*anyopaque,
-    run_fn: *const fn (?*anyopaque) void,
+    user_fn: ?*anyopaque,
+    execute_fn: *const fn (*Effect) void,
 
     pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self);
+        self.system.allocator.destroy(self);
     }
 
     pub fn run(self: *Self) void {
         self.system.observer_stack.append(self) catch return;
-        self.run_fn(self.context);
-        _ = self.system.observer_stack.pop();
+        defer _ = self.system.observer_stack.pop();
+        self.execute_fn(self);
     }
 };
 
@@ -104,7 +112,7 @@ test "create signal, get and set value" {
     try std.testing.expectEqual(my_signal.get(), 25);
 }
 
-test "create effect and run it on dependency change" {
+test "create type-safe effect" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var ss = SignalSystem.init(gpa.allocator());
@@ -114,8 +122,7 @@ test "create effect and run it on dependency change" {
         name: *Signal([]const u8),
         run_count: u32,
 
-        fn run(ctx_ptr: ?*anyopaque) void {
-            const self = @as(*@This(), @ptrFromInt(@intFromPtr(ctx_ptr.?)));
+        fn run(self: *@This()) void {
             _ = self.name.get();
             self.run_count += 1;
         }
@@ -127,7 +134,7 @@ test "create effect and run it on dependency change" {
     };
     defer context.name.deinit();
 
-    var effect = try ss.createEffect(&context, &EffectContext.run);
+    var effect = try ss.createEffect(EffectContext, &context, &EffectContext.run);
     defer effect.deinit();
 
     try std.testing.expectEqual(context.run_count, 1);
