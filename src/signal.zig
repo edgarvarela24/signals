@@ -1,5 +1,45 @@
 const std = @import("std");
 
+fn isStringLike(comptime T: type) bool {
+    const info = @typeInfo(T);
+    return switch (info) {
+        .pointer => |ptr_info| {
+            return switch (ptr_info.size) {
+                .slice => ptr_info.child == u8,
+                .one => blk: {
+                    const pointee_info = @typeInfo(ptr_info.child);
+                    break :blk switch (pointee_info) {
+                        .array => |arr_info| arr_info.child == u8,
+                        else => false,
+                    };
+                },
+                .c => false,
+                .many => false,
+            };
+        },
+        .array => |arr_info| arr_info.child == u8,
+        else => false,
+    };
+}
+
+fn getSignalType(comptime options: anytype) type {
+    if (@hasField(@TypeOf(options), "T")) {
+        return options.T;
+    } else {
+        const ValueType = @TypeOf(options.value);
+
+        if (isStringLike(ValueType)) {
+            return []const u8;
+        } else if (ValueType == comptime_int) {
+            return i32;
+        } else if (ValueType == comptime_float) {
+            return f64;
+        } else {
+            return ValueType;
+        }
+    }
+}
+
 pub const SignalSystem = struct {
     allocator: std.mem.Allocator,
     observer_stack: std.ArrayList(*Effect),
@@ -16,12 +56,13 @@ pub const SignalSystem = struct {
         self.observer_stack.deinit();
     }
 
-    pub fn createSignal(self: *@This(), comptime T: type, value: T) !*Signal(T) {
+    pub fn createSignal(self: *@This(), options: anytype) !*Signal(getSignalType(options)) {
+        const T = getSignalType(options);
         const ptr = try self.allocator.create(Signal(T));
         ptr.* = .{
             .allocator = self.allocator,
-            .system = self, // Set the pointer back to the system.
-            .value = value,
+            .system = self,
+            .value = options.value,
             .subscribers = std.ArrayList(*Effect).init(self.allocator),
         };
         return ptr;
@@ -102,13 +143,31 @@ pub const Effect = struct {
 };
 
 // --- TESTS ---
+test "isStringLike function" {
+    const testing = std.testing;
+
+    // === Positive Cases (should return true) ===
+    try testing.expect(isStringLike([]const u8));
+    try testing.expect(isStringLike([]u8));
+    try testing.expect(isStringLike(@TypeOf("hello")));
+    try testing.expect(isStringLike(*const [10]u8));
+    try testing.expect(isStringLike(*[10]u8));
+    try testing.expect(isStringLike([10]u8));
+
+    // === Negative Cases (should return false) ===
+    try testing.expect(!isStringLike(i32));
+    try testing.expect(!isStringLike([]const i32));
+    try testing.expect(!isStringLike([10]bool));
+    try testing.expect(!isStringLike(*const f32));
+}
+
 test "create signal, get and set value" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var ss = SignalSystem.init(gpa.allocator());
     defer ss.deinit();
 
-    var my_signal = try ss.createSignal(i32, 10);
+    var my_signal = try ss.createSignal(.{ .value = 10 });
     defer my_signal.deinit();
 
     try std.testing.expectEqual(my_signal.get(), 10);
@@ -133,7 +192,7 @@ test "create type-safe effect" {
     };
 
     var context = EffectContext{
-        .name = try ss.createSignal([]const u8, "Evan"),
+        .name = try ss.createSignal(.{ .value = "Evan" }),
         .run_count = 0,
     };
     defer context.name.deinit();
@@ -153,7 +212,7 @@ test "effect does not create duplicate subscriptions" {
     defer ss.deinit();
 
     // ARRANGE: Set up a signal and a context to track the run count.
-    var counter = try ss.createSignal(i32, 0);
+    var counter = try ss.createSignal(.{ .value = 0 });
     defer counter.deinit();
 
     const EffectContext = struct {
