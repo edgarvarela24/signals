@@ -41,7 +41,7 @@ pub const SignalSystem = struct {
             .system = self, // Set the pointer back to the system.
             .context = context,
             .user_fn = @constCast(run_fn),
-            .execute_fn = &Wrapper.run,
+            .run_fn = &Wrapper.run,
         };
         // Run the effect once to establish initial subscriptions.
         ptr.run();
@@ -84,7 +84,7 @@ pub const Effect = struct {
     system: *SignalSystem,
     context: ?*anyopaque,
     user_fn: ?*anyopaque,
-    execute_fn: *const fn (*Effect) void,
+    run_fn: *const fn (*Effect) void,
 
     pub fn deinit(self: *Self) void {
         self.system.allocator.destroy(self);
@@ -93,7 +93,7 @@ pub const Effect = struct {
     pub fn run(self: *Self) void {
         self.system.observer_stack.append(self) catch return;
         defer _ = self.system.observer_stack.pop();
-        self.execute_fn(self);
+        self.run_fn(self);
     }
 };
 
