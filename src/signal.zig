@@ -60,7 +60,11 @@ pub fn Signal(comptime T: type) type {
         pub fn get(self: *Self) T {
             if (self.system.observer_stack.items.len > 0) {
                 const current_effect = self.system.observer_stack.items[self.system.observer_stack.items.len - 1];
-                self.subscribers.append(current_effect) catch {};
+                const found_index = std.mem.indexOfScalar(*Effect, self.subscribers.items, current_effect);
+
+                if (found_index == null) {
+                    self.subscribers.append(current_effect) catch {};
+                }
             }
             return self.value;
         }
@@ -140,4 +144,45 @@ test "create type-safe effect" {
     try std.testing.expectEqual(context.run_count, 1);
     context.name.set("North Star");
     try std.testing.expectEqual(context.run_count, 2);
+}
+
+test "effect does not create duplicate subscriptions" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    // ARRANGE: Set up a signal and a context to track the run count.
+    var counter = try ss.createSignal(i32, 0);
+    defer counter.deinit();
+
+    const EffectContext = struct {
+        signal_to_test: *Signal(i32),
+        run_count: u32,
+
+        fn run(self: *@This()) void {
+            // This function now correctly gets the signal from its own context.
+            _ = self.signal_to_test.get();
+            _ = self.signal_to_test.get();
+            _ = self.signal_to_test.get();
+
+            self.run_count += 1;
+        }
+    };
+    var context = EffectContext{ .signal_to_test = counter, .run_count = 0 };
+
+    // Create the effect, passing the counter signal as the context.
+    var effect = try ss.createEffect(EffectContext, &context, &EffectContext.run);
+    defer effect.deinit();
+
+    // ASSERT 1: The effect runs once on creation.
+    try std.testing.expectEqual(@as(u32, 1), context.run_count);
+
+    // ACT: Now, change the signal's value.
+    counter.set(123);
+
+    // ASSERT 2: The effect should have run ONLY ONE more time.
+    // If the bug existed, the count would be 4 (1 initial + 3 from the set).
+    // With the fix, the count will be 2 (1 initial + 1 from the set).
+    try std.testing.expectEqual(@as(u32, 2), context.run_count);
 }
