@@ -293,3 +293,98 @@ test "createEffect works with simple, field-less objects" {
     effect.run();
     try std.testing.expectEqual(2, SimpleEffect.run_count);
 }
+
+test "effect reacts to multiple signal dependencies" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    const FullNameEffect = struct {
+        first_name: *Signal([]const u8),
+        last_name: *Signal([]const u8),
+        full_name_buf: []u8,
+        run_count: u32,
+
+        fn run(self: *@This()) void {
+            const first = self.first_name.get();
+            const last = self.last_name.get();
+
+            _ = std.fmt.bufPrintZ(
+                self.full_name_buf,
+                "{s} {s}",
+                .{ first, last },
+            ) catch unreachable;
+
+            self.run_count += 1;
+        }
+    };
+
+    var buf: [100]u8 = undefined;
+    var my_effect = FullNameEffect{
+        .first_name = try ss.createSignal(.{ .value = "John" }),
+        .last_name = try ss.createSignal(.{ .value = "Doe" }),
+        .full_name_buf = &buf,
+        .run_count = 0,
+    };
+    defer my_effect.first_name.deinit();
+    defer my_effect.last_name.deinit();
+
+    var effect = try ss.createEffect(.{ .effect = &my_effect });
+    defer effect.deinit();
+
+    // 1. Check initial state
+    try std.testing.expectEqual(@as(u32, 1), my_effect.run_count);
+    try std.testing.expectEqualStrings("John Doe", std.mem.sliceTo(my_effect.full_name_buf, 0));
+
+    // 2. Update the FIRST signal
+    my_effect.first_name.set("Jane");
+    try std.testing.expectEqual(@as(u32, 2), my_effect.run_count);
+    try std.testing.expectEqualStrings("Jane Doe", std.mem.sliceTo(my_effect.full_name_buf, 0));
+
+    // 3. Update the SECOND signal
+    my_effect.last_name.set("Smith");
+    try std.testing.expectEqual(@as(u32, 3), my_effect.run_count);
+    try std.testing.expectEqualStrings("Jane Smith", std.mem.sliceTo(my_effect.full_name_buf, 0));
+}
+
+test "signal can be updated from anywhere" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    // 1. Create a signal completely on its own.
+    var standalone_signal = try ss.createSignal(.{ .value = "Click me" });
+    defer standalone_signal.deinit();
+
+    const ButtonEffect = struct {
+        // The effect just holds a pointer to the signal.
+        button_text: *Signal([]const u8),
+        click_count: u32,
+
+        fn run(self: *@This()) void {
+            // This effect just "listens" to the signal.
+            _ = self.button_text.get();
+            self.click_count += 1;
+        }
+    };
+
+    var my_button_effect = ButtonEffect{
+        .button_text = standalone_signal, // It gets the pointer here.
+        .click_count = 0,
+    };
+
+    var effect = try ss.createEffect(.{ .effect = &my_button_effect });
+    defer effect.deinit();
+
+    // The effect ran once on creation.
+    try std.testing.expectEqual(1, my_button_effect.click_count);
+
+    // 2. Now, update the original, standalone signal variable.
+    //    We are NOT touching the effect object at all.
+    standalone_signal.set("Clicked!");
+
+    // 3. The effect still re-ran automatically!
+    try std.testing.expectEqual(2, my_button_effect.click_count);
+}
