@@ -68,7 +68,9 @@ pub const SignalSystem = struct {
         return ptr;
     }
 
-    pub fn createEffect(self: *@This(), effect_object: anytype) !*Effect {
+    pub fn createEffect(self: *@This(), options: anytype) !*Effect {
+        const effect_object = @field(options, "effect");
+
         const EffectObject = @TypeOf(effect_object.*);
 
         // At compile time, ensure the passed object has a 'run' method.
@@ -213,7 +215,7 @@ test "effect does not create duplicate subscriptions" {
     var context = EffectContext{ .signal_to_test = counter, .run_count = 0 };
 
     // Create the effect, passing the counter signal as the context.
-    var effect = try ss.createEffect(&context);
+    var effect = try ss.createEffect(.{ .effect = &context });
     defer effect.deinit();
 
     // ASSERT 1: The effect runs once on creation.
@@ -250,7 +252,7 @@ test "createEffect with an effect object" {
     };
     defer my_effect.name.deinit();
 
-    var effect = try ss.createEffect(&my_effect);
+    var effect = try ss.createEffect(.{ .effect = &my_effect });
     defer effect.deinit();
 
     try std.testing.expectEqual(my_effect.run_count, 1);
@@ -280,7 +282,7 @@ test "createEffect works with simple, field-less objects" {
     var simple_effect = SimpleEffect{};
 
     // Pass the simple effect object to createEffect.
-    var effect = try ss.createEffect(&simple_effect);
+    var effect = try ss.createEffect(.{ .effect = &simple_effect });
     defer effect.deinit();
 
     // It should have run once on creation.
