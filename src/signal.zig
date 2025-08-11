@@ -70,10 +70,8 @@ pub const SignalSystem = struct {
 
     pub fn createEffect(self: *@This(), options: anytype) !*Effect {
         const effect_object = @field(options, "effect");
-
         const EffectObject = @TypeOf(effect_object.*);
 
-        // At compile time, ensure the passed object has a 'run' method.
         comptime {
             if (!@hasDecl(EffectObject, "run")) {
                 @compileError("Effect object of type '" ++ @typeName(EffectObject) ++ "' must have a 'run' method.");
@@ -81,28 +79,139 @@ pub const SignalSystem = struct {
         }
 
         const run_fn = &EffectObject.run;
-        const Context = EffectObject; // The object's type is the context type.
+        const has_deinit = @hasDecl(EffectObject, "deinit");
+        const deinit_fn: ?*const fn (*EffectObject) void = if (has_deinit) &EffectObject.deinit else null;
 
         const Wrapper = struct {
             fn run(effect: *Effect) void {
-                const typed_context: *Context = @alignCast(@ptrCast(effect.context.?));
-                const user_run_fn: *const fn (*Context) void = @alignCast(@ptrCast(effect.user_fn.?));
+                const typed_context: *EffectObject = @alignCast(@ptrCast(effect.context.?));
+                const user_run_fn: *const fn (*EffectObject) void = @alignCast(@ptrCast(effect.user_fn.?));
                 user_run_fn(typed_context);
+            }
+
+            fn deinit(effect: *Effect) void {
+                const typed_context: *EffectObject = @alignCast(@ptrCast(effect.context.?));
+                if (effect.user_deinit_fn) |user_deinit| {
+                    const user_deinit_fn: *const fn (*EffectObject) void = @alignCast(@ptrCast(user_deinit));
+                    user_deinit_fn(typed_context);
+                }
             }
         };
 
         const ptr = try self.allocator.create(Effect);
         ptr.* = .{
             .system = self,
-            .context = effect_object, // The context is the object itself.
+            .context = effect_object,
             .user_fn = @constCast(run_fn),
+            .user_deinit_fn = @constCast(deinit_fn),
             .run_fn = &Wrapper.run,
+            .deinit_fn = &Wrapper.deinit,
         };
 
         ptr.run();
         return ptr;
     }
+
+    pub fn createMemo(self: *@This(), options: anytype) !*Memo(@TypeOf(options.compute.run())) {
+        const ComputeObj = @TypeOf(options.compute.*);
+        const T = @TypeOf(options.compute.run());
+
+        comptime {
+            if (!@hasDecl(ComputeObj, "run")) {
+                @compileError("Memo compute object of type '" ++ @typeName(ComputeObj) ++ "' must have a 'run' method.");
+            }
+        }
+
+        const MemoUpdater = struct {
+            compute_obj: *const ComputeObj,
+            memo_signal: *Signal(T),
+            allocator: std.mem.Allocator,
+            is_initialized: bool = false,
+
+            fn run(_self: *@This()) void {
+                // First, compute the new value.
+                const new_value = _self.compute_obj.run();
+
+                const old_value = _self.memo_signal.value;
+
+                _self.memo_signal.set(new_value);
+
+                // If this wasn't the first run, it's now safe to free the old memory.
+                if (_self.is_initialized) {
+                    if (comptime @typeInfo(T) == .pointer and @typeInfo(T).pointer.size == .slice and @typeInfo(T).pointer.child == u8) {
+                        _self.allocator.free(old_value);
+                    }
+                }
+
+                _self.is_initialized = true;
+            }
+
+            fn deinit(_self: *@This()) void {
+                // Free the very last computed value when the memo is destroyed.
+                if (_self.is_initialized) {
+                    if (comptime @typeInfo(T) == .pointer and @typeInfo(T).pointer.size == .slice and @typeInfo(T).pointer.child == u8) {
+                        _self.allocator.free(_self.memo_signal.get());
+                    }
+                }
+            }
+        };
+
+        const helpers = struct {
+            fn destroy_memo_updater(allocator: std.mem.Allocator, context: ?*anyopaque) void {
+                const typed_context: *MemoUpdater = @ptrCast(@alignCast(context.?));
+                allocator.destroy(typed_context);
+            }
+        };
+
+        const memo = try self.allocator.create(Memo(T));
+        // The signal's value is `undefined` initially. The effect will immediately
+        // run and set it to a valid, heap-allocated string.
+        const internal_signal = try self.createSignal(.{ .value = undefined, .T = T });
+
+        const updater_context = try self.allocator.create(MemoUpdater);
+        updater_context.* = .{
+            .compute_obj = options.compute,
+            .memo_signal = internal_signal,
+            .allocator = self.allocator,
+        };
+
+        const internal_effect = try self.createEffect(.{ .effect = updater_context });
+
+        memo.* = .{
+            .allocator = self.allocator,
+            .signal = internal_signal,
+            .effect = internal_effect,
+            .updater_context = updater_context,
+            .destroy_updater_fn = &helpers.destroy_memo_updater,
+        };
+
+        return memo;
+    }
 };
+
+pub fn Memo(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        allocator: std.mem.Allocator,
+        signal: *Signal(T),
+        effect: *Effect,
+        updater_context: ?*anyopaque,
+        destroy_updater_fn: ?*const fn (std.mem.Allocator, *anyopaque) void,
+
+        pub fn get(self: *Self) T {
+            return self.signal.get();
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.effect.deinit();
+            self.signal.deinit();
+            if (self.destroy_updater_fn) |destroy_fn| {
+                destroy_fn(self.allocator, self.updater_context.?);
+            }
+            self.allocator.destroy(self);
+        }
+    };
+}
 
 pub fn Signal(comptime T: type) type {
     return struct {
@@ -143,9 +252,12 @@ pub const Effect = struct {
     system: *SignalSystem,
     context: ?*anyopaque,
     user_fn: ?*anyopaque,
+    user_deinit_fn: ?*anyopaque,
     run_fn: *const fn (*Effect) void,
+    deinit_fn: *const fn (*Effect) void,
 
     pub fn deinit(self: *Self) void {
+        self.deinit_fn(self);
         self.system.allocator.destroy(self);
     }
 
@@ -195,7 +307,7 @@ test "effect does not create duplicate subscriptions" {
     var ss = SignalSystem.init(gpa.allocator());
     defer ss.deinit();
 
-    // ARRANGE: Set up a signal and a context to track the run count.
+    // Set up a signal and a context to track the run count.
     var counter = try ss.createSignal(.{ .value = 0 });
     defer counter.deinit();
 
@@ -204,7 +316,6 @@ test "effect does not create duplicate subscriptions" {
         run_count: u32,
 
         fn run(self: *@This()) void {
-            // This function now correctly gets the signal from its own context.
             _ = self.signal_to_test.get();
             _ = self.signal_to_test.get();
             _ = self.signal_to_test.get();
@@ -218,13 +329,13 @@ test "effect does not create duplicate subscriptions" {
     var effect = try ss.createEffect(.{ .effect = &context });
     defer effect.deinit();
 
-    // ASSERT 1: The effect runs once on creation.
+    // The effect runs once on creation.
     try std.testing.expectEqual(@as(u32, 1), context.run_count);
 
-    // ACT: Now, change the signal's value.
+    // change the signal's value.
     counter.set(123);
 
-    // ASSERT 2: The effect should have run ONLY ONE more time.
+    // The effect should have run ONLY ONE more time.
     // If the bug existed, the count would be 4 (1 initial + 3 from the set).
     // With the fix, the count will be 2 (1 initial + 1 from the set).
     try std.testing.expectEqual(@as(u32, 2), context.run_count);
@@ -245,18 +356,18 @@ test "createEffect with an effect object" {
             self.run_count += 1;
         }
     };
-
+    var my_signal = try ss.createSignal(.{ .value = "Evan" });
+    defer my_signal.deinit();
     var my_effect = TestEffectWithContext{
-        .name = try ss.createSignal(.{ .value = "Evan" }),
+        .name = my_signal,
         .run_count = 0,
     };
-    defer my_effect.name.deinit();
 
     var effect = try ss.createEffect(.{ .effect = &my_effect });
     defer effect.deinit();
 
     try std.testing.expectEqual(my_effect.run_count, 1);
-    my_effect.name.set("North Star");
+    my_signal.set("North Star");
     try std.testing.expectEqual(my_effect.run_count, 2);
 }
 
@@ -299,7 +410,10 @@ test "effect reacts to multiple signal dependencies" {
     defer _ = gpa.deinit();
     var ss = SignalSystem.init(gpa.allocator());
     defer ss.deinit();
-
+    var first_name_sig = try ss.createSignal(.{ .value = "John" });
+    defer first_name_sig.deinit();
+    var last_name_sig = try ss.createSignal(.{ .value = "Doe" });
+    defer last_name_sig.deinit();
     const FullNameEffect = struct {
         first_name: *Signal([]const u8),
         last_name: *Signal([]const u8),
@@ -322,28 +436,22 @@ test "effect reacts to multiple signal dependencies" {
 
     var buf: [100]u8 = undefined;
     var my_effect = FullNameEffect{
-        .first_name = try ss.createSignal(.{ .value = "John" }),
-        .last_name = try ss.createSignal(.{ .value = "Doe" }),
+        .first_name = first_name_sig,
+        .last_name = last_name_sig,
         .full_name_buf = &buf,
         .run_count = 0,
     };
-    defer my_effect.first_name.deinit();
-    defer my_effect.last_name.deinit();
 
     var effect = try ss.createEffect(.{ .effect = &my_effect });
     defer effect.deinit();
 
-    // 1. Check initial state
+    // Check initial state
     try std.testing.expectEqual(@as(u32, 1), my_effect.run_count);
     try std.testing.expectEqualStrings("John Doe", std.mem.sliceTo(my_effect.full_name_buf, 0));
-
-    // 2. Update the FIRST signal
-    my_effect.first_name.set("Jane");
+    first_name_sig.set("Jane");
     try std.testing.expectEqual(@as(u32, 2), my_effect.run_count);
     try std.testing.expectEqualStrings("Jane Doe", std.mem.sliceTo(my_effect.full_name_buf, 0));
-
-    // 3. Update the SECOND signal
-    my_effect.last_name.set("Smith");
+    last_name_sig.set("Smith");
     try std.testing.expectEqual(@as(u32, 3), my_effect.run_count);
     try std.testing.expectEqualStrings("Jane Smith", std.mem.sliceTo(my_effect.full_name_buf, 0));
 }
@@ -354,7 +462,7 @@ test "signal can be updated from anywhere" {
     var ss = SignalSystem.init(gpa.allocator());
     defer ss.deinit();
 
-    // 1. Create a signal completely on its own.
+    // Create a signal completely on its own.
     var standalone_signal = try ss.createSignal(.{ .value = "Click me" });
     defer standalone_signal.deinit();
 
@@ -371,7 +479,7 @@ test "signal can be updated from anywhere" {
     };
 
     var my_button_effect = ButtonEffect{
-        .button_text = standalone_signal, // It gets the pointer here.
+        .button_text = standalone_signal,
         .click_count = 0,
     };
 
@@ -381,10 +489,50 @@ test "signal can be updated from anywhere" {
     // The effect ran once on creation.
     try std.testing.expectEqual(1, my_button_effect.click_count);
 
-    // 2. Now, update the original, standalone signal variable.
+    // Now, update the original, standalone signal variable.
     //    We are NOT touching the effect object at all.
     standalone_signal.set("Clicked!");
 
-    // 3. The effect still re-ran automatically!
+    // The effect still re-ran automatically!
     try std.testing.expectEqual(2, my_button_effect.click_count);
+}
+
+test "createMemo computes derived state" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var ss = SignalSystem.init(gpa.allocator());
+    defer ss.deinit();
+
+    var first_name = try ss.createSignal(.{ .value = "John" });
+    defer first_name.deinit();
+
+    var last_name = try ss.createSignal(.{ .value = "Doe" });
+    defer last_name.deinit();
+
+    const FullNameComputer = struct {
+        allocator: std.mem.Allocator,
+        first: *Signal([]const u8),
+        last: *Signal([]const u8),
+        fn run(self: *const @This()) []const u8 {
+            const f = self.first.get();
+            const l = self.last.get();
+            const combined = std.fmt.allocPrint(self.allocator, "{s} {s}", .{ f, l }) catch unreachable;
+            return combined;
+        }
+    };
+
+    const computer = FullNameComputer{
+        .allocator = ss.allocator,
+        .first = first_name,
+        .last = last_name,
+    };
+
+    var full_name = try ss.createMemo(.{ .compute = &computer });
+    defer full_name.deinit();
+
+    try std.testing.expectEqualStrings("John Doe", full_name.get());
+
+    first_name.set("Jane");
+
+    try std.testing.expectEqualStrings("Jane Doe", full_name.get());
 }
