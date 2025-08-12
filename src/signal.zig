@@ -40,7 +40,7 @@ fn getSignalType(comptime options: anytype) type {
     }
 }
 
-pub const SignalSystem = struct {
+pub const Scope = struct {
     allocator: std.mem.Allocator,
     observer_stack: std.ArrayList(*Effect),
 
@@ -52,7 +52,7 @@ pub const SignalSystem = struct {
     }
 
     pub fn deinit(self: *@This()) void {
-        // The system only owns the stack. Signals/Effects are owned by the user.
+        // The scope only owns the stack. Signals/Effects are owned by the user.
         self.observer_stack.deinit();
     }
 
@@ -61,7 +61,7 @@ pub const SignalSystem = struct {
         const ptr = try self.allocator.create(Signal(T));
         ptr.* = .{
             .allocator = self.allocator,
-            .system = self,
+            .scope = self,
             .value = options.value,
             .subscribers = std.ArrayList(*Effect).init(self.allocator),
         };
@@ -100,7 +100,7 @@ pub const SignalSystem = struct {
 
         const ptr = try self.allocator.create(Effect);
         ptr.* = .{
-            .system = self,
+            .scope = self,
             .context = effect_object,
             .user_fn = @constCast(run_fn),
             .user_deinit_fn = @constCast(deinit_fn),
@@ -217,13 +217,13 @@ pub fn Signal(comptime T: type) type {
     return struct {
         const Self = @This();
         allocator: std.mem.Allocator,
-        system: *SignalSystem,
+        scope: *Scope,
         value: T,
         subscribers: std.ArrayList(*Effect),
 
         pub fn get(self: *Self) T {
-            if (self.system.observer_stack.items.len > 0) {
-                const current_effect = self.system.observer_stack.items[self.system.observer_stack.items.len - 1];
+            if (self.scope.observer_stack.items.len > 0) {
+                const current_effect = self.scope.observer_stack.items[self.scope.observer_stack.items.len - 1];
                 const found_index = std.mem.indexOfScalar(*Effect, self.subscribers.items, current_effect);
 
                 if (found_index == null) {
@@ -249,7 +249,7 @@ pub fn Signal(comptime T: type) type {
 
 pub const Effect = struct {
     const Self = @This();
-    system: *SignalSystem,
+    scope: *Scope,
     context: ?*anyopaque,
     user_fn: ?*anyopaque,
     user_deinit_fn: ?*anyopaque,
@@ -258,12 +258,12 @@ pub const Effect = struct {
 
     pub fn deinit(self: *Self) void {
         self.deinit_fn(self);
-        self.system.allocator.destroy(self);
+        self.scope.allocator.destroy(self);
     }
 
     pub fn run(self: *Self) void {
-        self.system.observer_stack.append(self) catch return;
-        defer _ = self.system.observer_stack.pop();
+        self.scope.observer_stack.append(self) catch return;
+        defer _ = self.scope.observer_stack.pop();
         self.run_fn(self);
     }
 };
@@ -290,7 +290,7 @@ test "isStringLike function" {
 test "create signal, get and set value" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     var my_signal = try ss.createSignal(.{ .value = 10 });
@@ -304,7 +304,7 @@ test "create signal, get and set value" {
 test "effect does not create duplicate subscriptions" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     // Set up a signal and a context to track the run count.
@@ -344,7 +344,7 @@ test "effect does not create duplicate subscriptions" {
 test "createEffect with an effect object" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     const TestEffectWithContext = struct {
@@ -374,7 +374,7 @@ test "createEffect with an effect object" {
 test "createEffect works with simple, field-less objects" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     const SimpleEffect = struct {
@@ -408,7 +408,7 @@ test "createEffect works with simple, field-less objects" {
 test "effect reacts to multiple signal dependencies" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
     var first_name_sig = try ss.createSignal(.{ .value = "John" });
     defer first_name_sig.deinit();
@@ -459,7 +459,7 @@ test "effect reacts to multiple signal dependencies" {
 test "signal can be updated from anywhere" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     // Create a signal completely on its own.
@@ -500,7 +500,7 @@ test "signal can be updated from anywhere" {
 test "createMemo computes derived state" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = SignalSystem.init(gpa.allocator());
+    var ss = Scope.init(gpa.allocator());
     defer ss.deinit();
 
     var first_name = try ss.createSignal(.{ .value = "John" });
