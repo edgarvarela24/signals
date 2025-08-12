@@ -287,13 +287,15 @@ test "isStringLike function" {
     try testing.expect(!isStringLike(*const f32));
 }
 
-test "create signal, get and set value" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+test "create signal, get and set value - with DebugAllocator" {
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
-    var my_signal = try ss.createSignal(.{ .value = 10 });
+    var scope = Scope.init(allocator);
+    defer scope.deinit();
+
+    var my_signal = try scope.createSignal(.{ .value = 10 });
     defer my_signal.deinit();
 
     try std.testing.expectEqual(my_signal.get(), 10);
@@ -302,9 +304,11 @@ test "create signal, get and set value" {
 }
 
 test "effect does not create duplicate subscriptions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
 
     // Set up a signal and a context to track the run count.
@@ -341,10 +345,12 @@ test "effect does not create duplicate subscriptions" {
     try std.testing.expectEqual(@as(u32, 2), context.run_count);
 }
 
-test "createEffect with an effect object" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+test "createEffect with an effect object - with DebugAllocator" {
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
 
     const TestEffectWithContext = struct {
@@ -372,9 +378,11 @@ test "createEffect with an effect object" {
 }
 
 test "createEffect works with simple, field-less objects" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
 
     const SimpleEffect = struct {
@@ -405,10 +413,12 @@ test "createEffect works with simple, field-less objects" {
     try std.testing.expectEqual(2, SimpleEffect.run_count);
 }
 
-test "effect reacts to multiple signal dependencies" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+test "effect reacts to multiple signal dependencies - with DebugAllocator" {
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
     var first_name_sig = try scope.createSignal(.{ .value = "John" });
     defer first_name_sig.deinit();
@@ -457,9 +467,11 @@ test "effect reacts to multiple signal dependencies" {
 }
 
 test "signal can be updated from anywhere" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
 
     // Create a signal completely on its own.
@@ -498,9 +510,11 @@ test "signal can be updated from anywhere" {
 }
 
 test "createMemo computes derived state" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var scope = Scope.init(gpa.allocator());
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
     defer scope.deinit();
 
     var first_name = try scope.createSignal(.{ .value = "John" });
@@ -537,12 +551,12 @@ test "createMemo computes derived state" {
     try std.testing.expectEqualStrings("Jane Doe", full_name.get());
 }
 
-test "createMemo frees old string values without double-free" {
+test "createMemo frees old string values without double-free - with DebugAllocator" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit(); // This will check for leaks and report them
+    const allocator = debug_allocator.allocator();
 
     var scope = Scope.init(allocator);
     defer scope.deinit();
@@ -587,6 +601,52 @@ test "createMemo frees old string values without double-free" {
     first.set("Gamma");
     try testing.expectEqualStrings("Gamma Two", memo.get());
 
-    // We don't have an exact free count API, but we *can* at least deinit without crashing
+    // Clean up memo - DebugAllocator will verify all memory is properly freed
     memo.deinit();
+
+    // At this point, when debug_allocator.deinit() runs in the defer,
+    // it will report any leaked memory or double-frees
+}
+
+test "stress test - many signals with DebugAllocator" {
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
+    defer scope.deinit();
+
+    // Test creating many signals of the same type
+    var signals: [50]*Signal(i32) = undefined;
+
+    // Create signals with a comptime-known initial value
+    for (0..50) |i| {
+        signals[i] = try scope.createSignal(.{ .value = 0 });
+    }
+
+    // Now test setting them to different runtime values and verify
+    for (signals, 0..) |signal, i| {
+        const runtime_value = @as(i32, @intCast(i));
+        signal.set(runtime_value);
+        try std.testing.expectEqual(runtime_value, signal.get());
+        signal.set(runtime_value * 2);
+        try std.testing.expectEqual(runtime_value * 2, signal.get());
+    }
+
+    // Clean up all signals
+    for (signals) |signal| {
+        signal.deinit();
+    }
+
+    // Test different types too
+    var string_signals: [10]*Signal([]const u8) = undefined;
+    for (0..10) |i| {
+        string_signals[i] = try scope.createSignal(.{ .value = "initial" });
+    }
+
+    for (string_signals) |signal| {
+        signal.set("updated");
+        try std.testing.expectEqualStrings("updated", signal.get());
+        signal.deinit();
+    }
 }
