@@ -650,3 +650,44 @@ test "stress test - many signals with DebugAllocator" {
         signal.deinit();
     }
 }
+
+test "signals with custom struct types" {
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var scope = Scope.init(allocator);
+    defer scope.deinit();
+
+    // Simple struct - no heap data
+    const Point = struct { x: i32, y: i32 };
+    var point_signal = try scope.createSignal(.{ .value = Point{ .x = 10, .y = 20 } });
+    defer point_signal.deinit();
+
+    try std.testing.expectEqual(Point{ .x = 10, .y = 20 }, point_signal.get());
+    point_signal.set(Point{ .x = 50, .y = 100 });
+    try std.testing.expectEqual(Point{ .x = 50, .y = 100 }, point_signal.get());
+
+    // Struct with nested data
+    const User = struct {
+        name: []const u8,
+        age: i32,
+        active: bool,
+    };
+
+    var user_signal = try scope.createSignal(.{ .value = User{ .name = "Alice", .age = 25, .active = true } });
+    defer user_signal.deinit();
+
+    const user = user_signal.get();
+    try std.testing.expectEqualStrings("Alice", user.name);
+    try std.testing.expectEqual(@as(i32, 25), user.age);
+    try std.testing.expectEqual(true, user.active);
+
+    // Update the whole struct
+    user_signal.set(User{ .name = "Bob", .age = 30, .active = false });
+
+    const updated_user = user_signal.get();
+    try std.testing.expectEqualStrings("Bob", updated_user.name);
+    try std.testing.expectEqual(@as(i32, 30), updated_user.age);
+    try std.testing.expectEqual(false, updated_user.active);
+}
