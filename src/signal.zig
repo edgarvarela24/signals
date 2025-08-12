@@ -304,11 +304,11 @@ test "create signal, get and set value" {
 test "effect does not create duplicate subscriptions" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
 
     // Set up a signal and a context to track the run count.
-    var counter = try ss.createSignal(.{ .value = 0 });
+    var counter = try scope.createSignal(.{ .value = 0 });
     defer counter.deinit();
 
     const EffectContext = struct {
@@ -326,7 +326,7 @@ test "effect does not create duplicate subscriptions" {
     var context = EffectContext{ .signal_to_test = counter, .run_count = 0 };
 
     // Create the effect, passing the counter signal as the context.
-    var effect = try ss.createEffect(.{ .effect = &context });
+    var effect = try scope.createEffect(.{ .effect = &context });
     defer effect.deinit();
 
     // The effect runs once on creation.
@@ -344,8 +344,8 @@ test "effect does not create duplicate subscriptions" {
 test "createEffect with an effect object" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
 
     const TestEffectWithContext = struct {
         name: *Signal([]const u8),
@@ -356,14 +356,14 @@ test "createEffect with an effect object" {
             self.run_count += 1;
         }
     };
-    var my_signal = try ss.createSignal(.{ .value = "Evan" });
+    var my_signal = try scope.createSignal(.{ .value = "Evan" });
     defer my_signal.deinit();
     var my_effect = TestEffectWithContext{
         .name = my_signal,
         .run_count = 0,
     };
 
-    var effect = try ss.createEffect(.{ .effect = &my_effect });
+    var effect = try scope.createEffect(.{ .effect = &my_effect });
     defer effect.deinit();
 
     try std.testing.expectEqual(my_effect.run_count, 1);
@@ -374,8 +374,8 @@ test "createEffect with an effect object" {
 test "createEffect works with simple, field-less objects" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
 
     const SimpleEffect = struct {
         pub var run_count: u32 = 0;
@@ -393,7 +393,7 @@ test "createEffect works with simple, field-less objects" {
     var simple_effect = SimpleEffect{};
 
     // Pass the simple effect object to createEffect.
-    var effect = try ss.createEffect(.{ .effect = &simple_effect });
+    var effect = try scope.createEffect(.{ .effect = &simple_effect });
     defer effect.deinit();
 
     // It should have run once on creation.
@@ -408,11 +408,11 @@ test "createEffect works with simple, field-less objects" {
 test "effect reacts to multiple signal dependencies" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
-    var first_name_sig = try ss.createSignal(.{ .value = "John" });
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
+    var first_name_sig = try scope.createSignal(.{ .value = "John" });
     defer first_name_sig.deinit();
-    var last_name_sig = try ss.createSignal(.{ .value = "Doe" });
+    var last_name_sig = try scope.createSignal(.{ .value = "Doe" });
     defer last_name_sig.deinit();
     const FullNameEffect = struct {
         first_name: *Signal([]const u8),
@@ -442,7 +442,7 @@ test "effect reacts to multiple signal dependencies" {
         .run_count = 0,
     };
 
-    var effect = try ss.createEffect(.{ .effect = &my_effect });
+    var effect = try scope.createEffect(.{ .effect = &my_effect });
     defer effect.deinit();
 
     // Check initial state
@@ -459,11 +459,11 @@ test "effect reacts to multiple signal dependencies" {
 test "signal can be updated from anywhere" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
 
     // Create a signal completely on its own.
-    var standalone_signal = try ss.createSignal(.{ .value = "Click me" });
+    var standalone_signal = try scope.createSignal(.{ .value = "Click me" });
     defer standalone_signal.deinit();
 
     const ButtonEffect = struct {
@@ -483,7 +483,7 @@ test "signal can be updated from anywhere" {
         .click_count = 0,
     };
 
-    var effect = try ss.createEffect(.{ .effect = &my_button_effect });
+    var effect = try scope.createEffect(.{ .effect = &my_button_effect });
     defer effect.deinit();
 
     // The effect ran once on creation.
@@ -500,13 +500,13 @@ test "signal can be updated from anywhere" {
 test "createMemo computes derived state" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var ss = Scope.init(gpa.allocator());
-    defer ss.deinit();
+    var scope = Scope.init(gpa.allocator());
+    defer scope.deinit();
 
-    var first_name = try ss.createSignal(.{ .value = "John" });
+    var first_name = try scope.createSignal(.{ .value = "John" });
     defer first_name.deinit();
 
-    var last_name = try ss.createSignal(.{ .value = "Doe" });
+    var last_name = try scope.createSignal(.{ .value = "Doe" });
     defer last_name.deinit();
 
     const FullNameComputer = struct {
@@ -522,12 +522,12 @@ test "createMemo computes derived state" {
     };
 
     const computer = FullNameComputer{
-        .allocator = ss.allocator,
+        .allocator = scope.allocator,
         .first = first_name,
         .last = last_name,
     };
 
-    var full_name = try ss.createMemo(.{ .compute = &computer });
+    var full_name = try scope.createMemo(.{ .compute = &computer });
     defer full_name.deinit();
 
     try std.testing.expectEqualStrings("John Doe", full_name.get());
@@ -535,4 +535,58 @@ test "createMemo computes derived state" {
     first_name.set("Jane");
 
     try std.testing.expectEqualStrings("Jane Doe", full_name.get());
+}
+
+test "createMemo frees old string values without double-free" {
+    const testing = std.testing;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var scope = Scope.init(allocator);
+    defer scope.deinit();
+
+    var first = try scope.createSignal(.{ .value = "Alpha" });
+    defer first.deinit();
+
+    var last = try scope.createSignal(.{ .value = "One" });
+    defer last.deinit();
+
+    const FullNameComputer = struct {
+        allocator: std.mem.Allocator,
+        first: *Signal([]const u8),
+        last: *Signal([]const u8),
+        fn run(self: *const @This()) []const u8 {
+            return std.fmt.allocPrint(
+                self.allocator,
+                "{s} {s}",
+                .{ self.first.get(), self.last.get() },
+            ) catch unreachable;
+        }
+    };
+
+    var computer = FullNameComputer{
+        .allocator = allocator,
+        .first = first,
+        .last = last,
+    };
+
+    var memo = try scope.createMemo(.{ .compute = &computer });
+
+    // First value is computed
+    try testing.expectEqualStrings("Alpha One", memo.get());
+
+    // Change signals multiple times
+    first.set("Beta");
+    try testing.expectEqualStrings("Beta One", memo.get());
+
+    last.set("Two");
+    try testing.expectEqualStrings("Beta Two", memo.get());
+
+    first.set("Gamma");
+    try testing.expectEqualStrings("Gamma Two", memo.get());
+
+    // We don't have an exact free count API, but we *can* at least deinit without crashing
+    memo.deinit();
 }
