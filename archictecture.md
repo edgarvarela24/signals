@@ -1,87 +1,90 @@
-# Project North Star: Architecture Overview
-Last Updated: August 4, 2025
+# Signals: Fine-Grained Reactive Programming for Zig
+Last Updated: August 24, 2025
 
 ## 1. Vision & Core Philosophy
 
-Project North Star is a next-generation TUI (Terminal User Interface) framework for Zig. The goal is to enable the creation of highly performant, visually rich, and complex terminal applications that rival the developer experience and user experience of graphical apps.
+Signals is a fine-grained reactive programming library for Zig that provides efficient, automatic dependency tracking and state management. The goal is to enable developers to build complex, reactive applications with minimal boilerplate and maximum performance.
 
-The core philosophy is **"Reactive TEA"**: a hybrid of the predictable state management of **The Elm Architecture (TEA)** with the fine-grained performance of a modern **Signals-based reactive system**.
+The core philosophy is **"Fine-Grained Reactivity"**: automatic dependency tracking that updates only what needs to change, when it needs to change, without the overhead of virtual DOM diffing or manual subscription management.
 
-This architecture's primary goal is to provide an ergonomic, robust, and fun developer experience by providing strong compile-time guarantees and eliminating entire classes of bugs, while sidestepping the need for a Virtual DOM.
+This library's primary goal is to provide an ergonomic, type-safe, and performant reactive system that leverages Zig's compile-time capabilities to eliminate entire classes of bugs at compile time.
 
-## 2. The "Reactive TEA" Data Flow
+## 2. Core Concepts
 
-At its heart, the entire application follows a strict, unidirectional data flow. This is the central loop of the entire framework.
+The library is built around three main concepts that work together to provide fine-grained reactivity:
 
-```mermaid
-graph LR
-    %% Define Styles for a cleaner look
-    classDef framework fill:#e6f2ff,stroke:#a6c8ff
-    classDef applogic fill:#d9ebff,stroke:#a6c8ff
+### Signals
+**Signals** are reactive containers for values. They automatically track which computations depend on them and notify those computations when their values change.
 
-    %% A is the entry point
-    A[User Input]
-
-    %% J is the exit point
-    J[Screen Update]
-
-    %% Define the Framework subgraph
-    subgraph Framework Core
-        direction LR
-        B(Event Handler) --> C{Msg}
-        C --> D
-        F --> G
-        H --> I(Layout & Render Engine) --> J
-        
-        %% Nest the Application Logic subgraph
-        subgraph Application Logic
-            direction LR
-            D["update`(Model, Msg)"] --> E("Signal.set()")
-            G["view`(Model)"] --> H(UI Node Tree)
-        end
-
-        %% Connections that cross boundaries
-        E --> F(Reactive Effect)
-    end
-
-    %% The first connection into the framework
-    A --> B
-    
-    %% Assign classes to style the nodes
-    class B,C,E,F,H,I framework
-    class D,G applogic
+```zig
+var counter = try scope.createSignal(.{ .value = 0 });
+const value = counter.get(); // Read the current value
+counter.set(42);             // Update triggers dependent computations
 ```
 
-### 3. The Primitives
+### Effects
+**Effects** are computations that run in response to signal changes. They automatically subscribe to any signals they read during execution.
 
-These are the fundamental building blocks of the architecture.
+```zig
+const LoggingEffect = struct {
+    counter: *Signal(i32),
+    fn run(self: *@This()) void {
+        std.log.info("Counter: {}", .{self.counter.get()}); // Auto-subscribes
+    }
+};
+var effect = try scope.createEffect(.{ .effect = &logging_effect });
+```
 
-* **State (`Model`)**: A central `struct` that holds the application's entire state. Its fields are not plain data but are wrapped in `Signals`.
-* **Events (`Msg`)**: A tagged union representing every possible thing that can happen in the application (e.g., `.button_clicked`, `.data_received`, `.key_pressed`).
-* **Logic (`update` function)**: The single point of state mutation. It is a **pure function** with the signature `fn update(model: *Model, msg: Msg) !Cmd`. It computes the next state based on the current state and a `Msg`.
-* **Side Effects (`Cmd`)**: A data structure that describes an asynchronous operation to be performed (e.g., an HTTP request). The `update` function returns a `Cmd`. The framework runs the `Cmd`, which will eventually dispatch a new `Msg` back to the `update` function on completion.
-* **Reactivity (Signals API)**: The mechanism for fine-grained updates, avoiding full re-renders.
-    * `create_signal(value: T) -> Signal(T)`: Creates a reactive state container.
-    * `create_memo(fn) -> Signal(T)`: Creates a derived, cached read-only value.
-    * `create_effect(fn) -> void`: The bridge to the outside world. Executes a procedure (like rendering) whenever a signal it depends on changes.
-* **UI (`view` function)**: A **pure function** with the signature `fn view(model: *Model) !Node`. It reads from the `Model`'s signals and returns a declarative tree of `Node`s describing the desired UI. It does not perform any drawing itself.
+### Memos
+**Memos** are cached computations that automatically update when their dependencies change. They combine the reactivity of signals with the efficiency of caching.
 
-### 4. The Component & Rendering Pipeline
+```zig
+const DoublerComputer = struct {
+    counter: *Signal(i32),
+    fn run(self: *const @This()) i32 {
+        return self.counter.get() * 2; // Auto-subscribes to counter
+    }
+};
+var doubled = try scope.createMemo(.{ .compute = &doubler });
+```
 
-* **Component Model**: Components are not objects with their own `render` methods. They are compositions of `view` functions that return `Node` trees. This makes the entire UI a single, inspectable data structure.
-* **Rendering Pipeline**:
-    1.  The main `effect` calls the top-level `view` function, generating a `Node` tree.
-    2.  The **Layout Engine** walks this tree and calculates a `Rect {x, y, width, height}` for every `Node`.
-    3.  The results are drawn to an in-memory **Virtual Buffer**.
-    4.  This buffer is **diffed** against its state from the previous frame.
-    5.  A minimal set of terminal escape codes is generated to apply only the changes to the real terminal.
-### 5. Event Handling
+## 3. Automatic Dependency Tracking
 
-The framework adheres to a **keyboard-first, mouse-enhanced** design philosophy. All functionality is accessible via the keyboard, while the mouse serves as an optional accelerator for discoverability and direct manipulation.
+The library uses a simple but effective dependency tracking system:
 
-* **Unified Event Model:** The core principle is to decouple application logic from the input source. Both keyboard and mouse inputs are translated into the same set of `Msg`s before being sent to the `update` function. For example, clicking a button or pressing `Enter` while it's focused will dispatch the exact same `Msg`.
+1. **Read Tracking**: When an effect runs, it pushes itself onto a global observer stack
+2. **Subscription**: When a signal is read, it automatically subscribes the current observer
+3. **Notification**: When a signal changes, it notifies all its subscribers
+4. **Cleanup**: Subscriptions are managed automatically with proper memory cleanup
 
-* **Keyboard Input (Focus-Driven):** Keyboard navigation is managed by a **focus model**. The ID of the currently "active" component is stored in the `Model`. Keyboard events (e.g., `Enter`, `Tab`, character input) are routed to the focused component, which is responsible for dispatching the appropriate `Msg`.
+This approach eliminates the need for manual subscription management while providing fine-grained updates.
 
-* **Mouse Input (Hit-Detection-Driven):** Mouse interactivity is managed by **hit detection**. After the Layout Engine computes the `Rect` for every UI `Node`, the framework can map click coordinates to a specific component. A click on a component dispatches the corresponding `Msg` and will typically also update the `Model` to set focus on that component.
-* **Styling**: A `Style` struct is used to apply type-safe styling (`fg`, `bg`, attributes) to components.
+## 4. Memory Management
+
+The library follows Zig's explicit memory management philosophy:
+
+- **Scope-based**: All signals, effects, and memos are created within a `Scope`
+- **Manual cleanup**: Users are responsible for calling `deinit()` on created objects
+- **Debug support**: Full integration with Zig's `DebugAllocator` for leak detection
+- **Zero overhead**: No hidden allocations or reference counting
+
+## 5. Type Safety
+
+The library leverages Zig's compile-time capabilities for maximum type safety:
+
+- **Generic signals**: `Signal(T)` is fully typed and generic
+- **Compile-time validation**: Effect and memo objects are validated at compile time
+- **Type inference**: Signal types are automatically inferred from initial values
+- **No runtime type errors**: All type checking happens at compile time
+
+## 6. Use Cases
+
+This library is suitable for:
+
+- **State management**: Managing application state with automatic updates
+- **Data binding**: Creating reactive data flows in applications
+- **Event systems**: Building reactive event-driven architectures
+- **UI frameworks**: As a foundation for reactive UI systems
+- **Real-time systems**: Efficient propagation of changes through complex systems
+
+The library is designed to be composable and can serve as a foundation for higher-level abstractions like UI frameworks, query systems, or state management solutions.

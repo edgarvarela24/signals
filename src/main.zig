@@ -1,62 +1,71 @@
 const std = @import("std");
-
-const termbox = @import("termbox");
-const Termbox = termbox.Termbox;
+const signal = @import("signal.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var t = try Termbox.init(allocator);
-    defer t.shutdown() catch {};
+    std.log.info("Signals Library Demo", .{});
+    
+    // Initialize a scope for managing signals
+    var scope = signal.Scope.init(allocator);
+    defer scope.deinit();
 
-    try t.selectInputSettings(.{
-        .mode = .Esc,
-        .mouse = true,
-    });
+    // Create a counter signal
+    var counter = try scope.createSignal(.{ .value = 0 });
+    defer counter.deinit();
 
-    var anchor = t.back_buffer.anchor(1, 1);
-    try anchor.writer().print("Input testing", .{});
-
-    anchor.move(1, 2);
-    try anchor.writer().print("Press q key to quit", .{});
-
-    try t.present();
-
-    main: while (try t.pollEvent()) |ev| {
-        switch (ev) {
-            .Key => |key_ev| switch (key_ev.ch) {
-                'q' => break :main,
-                else => {},
-            },
-            else => {},
+    // Create an effect that logs changes to the counter
+    const LoggingEffect = struct {
+        counter_signal: *signal.Signal(i32),
+        
+        pub fn run(self: *@This()) void {
+            const value = self.counter_signal.get();
+            std.log.info("Counter value changed to: {}", .{value});
         }
+    };
 
-        t.clear();
-        anchor.move(1, 1);
-        switch (ev) {
-            .Key => |key_ev| {
-                // Check if it's a printable character (like 'a', 'b', '$')
-                if (key_ev.ch != 0) {
-                    // Use {u} to print the character, and {} to print the number code
-                    try anchor.writer().print("Key Press: '{u}' (code: {})", .{ key_ev.ch, key_ev.ch });
-                } else {
-                    // It's a special key like F1, Arrow Up, Spacebar, etc.
-                    try anchor.writer().print("Special Key: {}", .{key_ev.key});
-                }
-            },
-            .Mouse => |mouse_ev| {
-                try anchor.writer().print("Mouse: {} at ({}, {})", .{ mouse_ev.action, mouse_ev.x, mouse_ev.y });
-            },
-            else => |other_ev| {
-                // A catch-all for any other event types, like a resize event
-                try anchor.writer().print("Other Event: {}", .{other_ev});
-            },
+    var logging_effect = LoggingEffect{ .counter_signal = counter };
+    var effect = try scope.createEffect(.{ .effect = &logging_effect });
+    defer effect.deinit();
+
+    // Create a memo that doubles the counter value
+    const DoublerComputer = struct {
+        counter_signal: *signal.Signal(i32),
+        
+        pub fn run(self: *const @This()) i32 {
+            return self.counter_signal.get() * 2;
         }
-        anchor.move(1, 2);
-        try anchor.writer().print("Press q key to quit", .{});
+    };
 
-        try t.present();
-    }
+    var doubler_computer = DoublerComputer{ .counter_signal = counter };
+    var doubled_memo = try scope.createMemo(.{ .compute = &doubler_computer });
+    defer doubled_memo.deinit();
+
+    // Create an effect that logs the doubled value
+    const DoublerEffect = struct {
+        doubled_memo: *signal.Memo(i32),
+        
+        pub fn run(self: *@This()) void {
+            const value = self.doubled_memo.get();
+            std.log.info("Doubled value: {}", .{value});
+        }
+    };
+
+    var doubler_effect_ctx = DoublerEffect{ .doubled_memo = doubled_memo };
+    var doubler_effect = try scope.createEffect(.{ .effect = &doubler_effect_ctx });
+    defer doubler_effect.deinit();
+
+    // Demonstrate reactive updates
+    std.log.info("Setting counter to 5...", .{});
+    counter.set(5);
+
+    std.log.info("Setting counter to 10...", .{});
+    counter.set(10);
+
+    std.log.info("Setting counter to 42...", .{});
+    counter.set(42);
+
+    std.log.info("Demo completed successfully!", .{});
 }

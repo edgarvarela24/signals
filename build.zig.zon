@@ -1,17 +1,12 @@
 .{
-    .name = .north_star,
-    .version = "0.0.0",
-    .fingerprint = 0xef572030f25efe43,
+    .name = .signals,
+    .version = "0.1.0",
+    .fingerprint = 0xd6adc50d8fc5517c,
     .minimum_zig_version = "0.14.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
     },
-    .dependencies = .{
-        .@"zig-termbox" = .{
-            .url = "https://github.com/joachimschmidt557/zig-termbox/archive/master.tar.gz",
-            .hash = "1220621e9316e339ef8481b17138e83a44d2d2b92b8f10091051ab474fab62226823",
-        },
-    },
+    .dependencies = .{},
 }

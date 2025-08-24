@@ -1,79 +1,102 @@
-# Project North Star: The Roadmap
+# Signals Library: Development Roadmap
 
 ## Philosophy
 
-Alright. We've talked, we've designed. The architecture is solid. Now it's time to build. This roadmap is about ruthless prioritization and momentum. We will build the simplest thing that works, validate it, and iterate. We build a specific application first, and the framework emerges from its needs. No premature optimization, no building for imaginary use cases. Let's get to work.
+We've built a solid foundation for fine-grained reactive programming in Zig. Now it's time to polish, harden, and expand this library to serve the broader Zig ecosystem. We focus on developer experience, performance, and reliability above all else.
 
 ## Guiding Principles
 
-1.  **PoC First, Framework Second**: We are not building a framework. We are building a *single, simple application* (a counter) that *forces* us to create the framework's core.
-2.  **API is King**: The Developer Experience (DX) matters more than anything. If an API feels clunky or confusing, it's wrong. We fix it.
-3.  **YAGNI (You Ain't Gonna Need It)**: Start with a `list` for hit detection. Don't build a Quadtree. Don't build a complex `Cmd` system for websockets. Solve the problem in front of you, not the one you imagine for tomorrow.
-4.  **Embrace Zig**: We use Zig's strengths. Manual memory management is a feature. The `comptime` is our friend. Explicitness is our guide.
+1. **Developer Experience First**: The API should be intuitive, well-documented, and a joy to use
+2. **Zero-Cost Abstractions**: Leverage Zig's compile-time capabilities for maximum performance
+3. **Memory Safety**: Explicit memory management with excellent debugging support
+4. **Composability**: Build a foundation that others can extend and build upon
+5. **Real-World Tested**: Ensure the library works in production scenarios
 
 ---
 
-## Phase 0: The Foundation ("Hello, Terminal")
+## Phase 1: Library Hardening (Current - 2 weeks)
 
-**Goal:** Prove we can control the terminal. This is the bedrock.
+**Goal:** Create a production-ready, reliable signals library that can be safely used in real applications.
 
-**Tasks:**
-1.  **Project Setup**: Initialize a new Zig project with a build file.
-2.  **Dependency**: Fetch and link `termbox2`.
-3.  **Main Loop**: Write `main.zig`. It must:
-    * Initialize `termbox2`.
-    * Enter a loop that polls for events.
-    * If the event is the key 'q', break the loop.
-    * Properly de-initialize `termbox2` before exiting.
+**Core Stability:**
+- ✅ Comprehensive test suite with DebugAllocator integration
+- ✅ Memory leak detection and proper cleanup
+- ✅ Edge case handling for complex dependency graphs
+- 🔄 Error handling patterns and recovery strategies
+- 🔄 Performance benchmarks and optimization
 
-**Definition of Done:** You can run `zig build run` and see a blank terminal screen. Pressing 'q' exits the program cleanly.
+**Documentation & Examples:**
+- 🔄 Complete API documentation with examples
+- 🔄 Tutorial-style examples for different use cases
+- 🔄 Performance characteristics documentation
+- 🔄 Migration guide for different reactive patterns
 
-## Phase 1: The Reactive Core ("It's Alive!")
+**Build System:**
+- ✅ Static library build configuration
+- ✅ Test runner integration
+- 🔄 Package preparation for distribution
+- 🔄 CI/CD pipeline for automated testing
 
-**Goal:** Build a working, end-to-end prototype of the "Reactive TEA" data flow. This is the most critical phase.
+## Phase 2: API Expansion (2-3 weeks)
 
-**Tasks:**
-1.  **Build the Signal Primitives**:
-    * In a new file, `src/signal.zig`, create a minimal signal implementation.
-    * You need `create_signal(value: T) -> Signal(T)` with `.get()` and `.set()` methods.
-    * You need `create_effect(fn)`. `create_memo` can wait. Focus on the dependency tracking between `set` and `effect`.
-2.  **Implement the TEA Loop**:
-    * Define a `Model` struct with one field: `counter: Signal(u32)`.
-    * Define a `Msg` tagged union with one variant: `increment`.
-    * Define the `update(model, msg)` function that increments the counter signal when it receives the `.increment` msg.
-3.  **Implement the View->Render Bridge**:
-    * Define a placeholder `Node` union with just a `Text` variant.
-    * Write a top-level `view(model)` function that returns a `Node.Text` with the counter's current value.
-    * Write a dead-simple renderer that just knows how to print text to a fixed location on screen.
-    * In `main`, wrap the `view -> render` call inside a `create_effect` to link everything.
-4.  **Wire Input**: In the main loop from Phase 0, if the event is the key '+', dispatch the `increment` `Msg` to your `update` function.
+**Goal:** Add commonly needed reactive primitives and utilities.
 
-**Definition of Done:** A number appears on the screen. When you press '+', the number increments. You have successfully validated the entire reactive data flow.
+**Advanced Primitives:**
+- **Batch Updates**: Ability to batch multiple signal updates to prevent cascading effects
+- **Computed Signals**: Alternative memo syntax for simpler derived values  
+- **Signal Arrays**: Efficient handling of collections of reactive values
+- **Conditional Effects**: Effects that can be conditionally enabled/disabled
 
-## Phase 2: The Layout & Render Engine ("Building Blocks")
+**Utilities:**
+- **Debug Tools**: Runtime inspection of dependency graphs
+- **Performance Profiler**: Track update propagation and performance bottlenecks
+- **Testing Utilities**: Helpers for testing reactive code
 
-**Goal:** Abstract the rendering and enable composition of components.
+**Integration Helpers:**
+- **Async Bridge**: Integration with Zig's async/await for async effects
+- **Event Loop Integration**: Helpers for integrating with event loops
+- **Serialization**: Safe serialization/deserialization of signal state
 
-**Tasks:**
-1.  **Flesh out Core Structs**:
-    * Define the real `Style` struct.
-    * Expand the `Node` union to include `FlexBox` and `Text`. The `FlexBox` node will contain a slice of child `Node`s.
-2.  **Build the Layout Engine**:
-    * Write a function that takes a `Node` tree and a bounding `Rect` (initially, the whole screen).
-    * It should recursively traverse the tree, calculating and assigning a final `Rect` to every single `Node` based on FlexBox rules.
-3.  **Build the Real Renderer**:
-    * Implement the `Virtual Buffer` (a 2D grid of `Cell { char, style }`).
-    * Change the layout engine's output to draw to the `Virtual Buffer` instead of the screen directly.
-    * Implement the `diff` and `flush` logic that compares the current buffer to the previous one and generates `termbox2` calls.
-4.  **Refactor the PoC**: Rebuild the counter app from Phase 1 using a `FlexBox` to layout two `Text` components (a title and the counter value).
+## Phase 3: Ecosystem Integration (3-4 weeks)
 
-**Definition of Done:** A styled "Counter App" title and the reactive counter number are on screen, positioned correctly by `FlexBox`. The rendering is now flicker-free.
+**Goal:** Position the library as a foundational piece of the Zig ecosystem.
 
-## Phase 3 & Beyond: The Framework Emerges
+**Package Distribution:**
+- Package manager integration (when available)
+- Version management and semantic versioning
+- Comprehensive release notes and migration guides
 
-With the foundation from Phases 0-2, you can now add features as needed. The path becomes about expansion.
+**Community Building:**
+- Example applications showcasing different use cases
+- Blog posts and tutorials
+- Integration examples with popular Zig libraries
 
-* **Build More Core Components**: `Input` (this will require managing focus state in the `Model`), `List`, `ProgressBar`.
-* **Implement Mouse Support**: Build the hit detection system (list of rects) and dispatch `Msg`s for mouse events.
-* **Build the `Cmd` System**: Implement the runner for handling asynchronous operations. A great first `Cmd` would be one that waits for 1 second and then sends an `increment` `Msg`.
-* **Documentation & Examples**: Start documenting the API and building more complex example apps to stress-test the framework.
+**Real-World Validation:**
+- Use the library in a non-trivial application
+- Gather feedback from early adopters
+- Performance testing in production-like scenarios
+
+## Phase 4: Advanced Features (Future)
+
+**Goal:** Add sophisticated features for complex use cases.
+
+**Potential Extensions:**
+- **Signals Query**: TanStack Query-like functionality for async state management
+- **Time-Based Signals**: Signals that automatically update based on time
+- **Network-Aware Signals**: Signals that can synchronize across network boundaries
+- **Persistence Layer**: Automatic persistence and restoration of signal state
+- **DevTools**: Browser-like debugging tools for signal dependency graphs
+
+## Success Metrics
+
+- **Adoption**: Other Zig projects using the library as a dependency
+- **Stability**: Zero memory leaks or crashes in production use
+- **Performance**: Competitive with hand-written reactive code
+- **Developer Experience**: Positive feedback from the community
+- **Documentation**: Complete, accurate, and helpful documentation
+
+---
+
+## Current Status: ✅ Foundation Complete
+
+The core signals implementation is solid and battle-tested. All basic functionality works correctly with proper memory management. Ready to move into hardening and polish phase.
